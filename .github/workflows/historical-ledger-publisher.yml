@@ -50,6 +50,26 @@ jobs:
           HWM_CONTEXT_PUBLISHER_TOKEN: ${{ github.token }}
         run: python -m publisher.historical_ledger_publisher_v2 publish "$GITHUB_EVENT_PATH"
 
+  strict_gate:
+    needs: [preflight, publish]
+    if: ${{ needs.preflight.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Publish required bootstrap check only after exact trusted validation
+        env:
+          HWM_CONTEXT_STRICT_GATE_TOKEN: ${{ github.token }}
+        run: python -m publisher.strict_check_publisher "$GITHUB_EVENT_PATH"
+
   cleanup:
     if: >-
       ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' &&
