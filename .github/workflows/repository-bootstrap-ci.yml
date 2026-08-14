@@ -3,6 +3,9 @@ name: Repository Bootstrap CI
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - claims/claims.jsonl
+      - claims/conflicts.json
   push:
     branches: [main]
   workflow_dispatch:
