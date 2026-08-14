@@ -6,6 +6,12 @@ on:
     paths-ignore:
       - claims/claims.jsonl
       - claims/conflicts.json
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+    paths:
+      - claims/claims.jsonl
+      - claims/conflicts.json
   push:
     branches: [main]
   workflow_dispatch:
@@ -24,8 +30,18 @@ permissions:
 
 jobs:
   bootstrap:
-    name: bootstrap
+    name: >-
+      ${{ github.event_name == 'pull_request_target' &&
+          (github.event.pull_request.user.login != 'github-actions[bot]' ||
+           github.event.pull_request.user.id != 41898282 ||
+           !startsWith(github.event.pull_request.head.ref, 'publisher/historical-ledger/')) &&
+          'generated-ledger-preflight' || 'bootstrap' }}
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
     steps:
       - name: Verify dispatched exact head
         if: github.event_name == 'workflow_dispatch'
@@ -39,13 +55,27 @@ jobs:
           test "$GITHUB_SHA" = "$EXPECTED_HEAD"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_head || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_head || github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
       - name: Verify exact checkout
         if: github.event_name == 'workflow_dispatch'
         env:
           EXPECTED_HEAD: ${{ inputs.expected_head }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Verify protected-base checkout for generated PR gate
+        if: github.event_name == 'pull_request_target'
+        env:
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
+      - name: Validate exact generated PR from protected-base code
+        if: >-
+          github.event_name == 'pull_request_target' &&
+          github.event.pull_request.user.login == 'github-actions[bot]' &&
+          github.event.pull_request.user.id == 41898282 &&
+          startsWith(github.event.pull_request.head.ref, 'publisher/historical-ledger/')
+        env:
+          HWM_CONTEXT_GATE_TOKEN: ${{ github.token }}
+        run: python -m publisher.strict_generated_pr_gate "$GITHUB_EVENT_PATH"
       - name: Validate materialized read-model boundary
         shell: bash
         run: |
