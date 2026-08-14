@@ -5,18 +5,45 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: historical-ledger publisher request id
+        required: true
+        type: string
+      expected_head:
+        description: exact candidate commit SHA to validate
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   bootstrap:
+    name: bootstrap
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Verify dispatched exact head
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          case "$EXPECTED_HEAD" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) echo "invalid expected_head" >&2; exit 1 ;;
+          esac
+          test "$GITHUB_SHA" = "$EXPECTED_HEAD"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_head || github.sha }}
           persist-credentials: false
-      - name: Validate materialized read-model skeleton
+      - name: Verify exact checkout
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Validate materialized read-model boundary
         shell: bash
         run: |
           set -euo pipefail
@@ -24,8 +51,17 @@ jobs:
           test -f .github/CODEOWNERS
           grep -q 'Public derived/materialized read-model repository' README.md
           grep -q 'safe for full public disclosure' README.md
-          for d in bootstrap state tasks claims wiki graph health; do
+          for d in bootstrap state tasks wiki graph health; do
             test -f "$d/.gitkeep"
             count="$(find "$d" -type f ! -name .gitkeep | wc -l)"
             test "$count" -eq 0
           done
+          test -f claims/.gitkeep
+          unexpected="$(find claims -type f ! -name .gitkeep ! -path claims/claims.jsonl ! -path claims/conflicts.json -print)"
+          test -z "$unexpected"
+          if test -e claims/claims.jsonl || test -e claims/conflicts.json; then
+            test -f claims/claims.jsonl
+            test -f claims/conflicts.json
+          fi
+      - name: Run repository-local publisher security tests
+        run: python -m unittest discover -s publisher -p 'test_*.py' -v
