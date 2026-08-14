@@ -56,16 +56,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
-      checks: write
       contents: read
       issues: read
       pull-requests: read
+      statuses: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
-      - name: Publish required bootstrap check only after exact trusted validation
+      - name: Publish required bootstrap status only after exact trusted validation
         env:
           HWM_CONTEXT_STRICT_GATE_TOKEN: ${{ github.token }}
         run: python -m publisher.strict_check_publisher "$GITHUB_EVENT_PATH"

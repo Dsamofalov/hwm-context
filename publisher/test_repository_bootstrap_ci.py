@@ -50,6 +50,7 @@ class RepositoryBootstrapAutomationCompatibilityTests(unittest.TestCase):
     def test_no_generated_pr_automatic_target_gate(self):
         self.assertNotIn("  pull_request_target:\n", self.bootstrap)
         self.assertNotIn("checks: write", self.bootstrap)
+        self.assertNotIn("statuses: write", self.bootstrap)
         self.assertNotIn("strict_generated_pr_gate", self.bootstrap)
 
     def test_push_main_and_workflow_dispatch_preserved(self):
@@ -82,19 +83,21 @@ class RepositoryBootstrapAutomationCompatibilityTests(unittest.TestCase):
         self.assertIn("      issues: write\n", publish_block)
         self.assertIn("      actions: write\n", publish_block)
         self.assertNotIn("checks: write", publish_block)
+        self.assertNotIn("statuses: write", publish_block)
         self.assertNotIn("gh pr merge", self.publisher)
         self.assertNotIn("pull_request_review", self.publisher)
 
-    def test_strict_gate_is_isolated_read_plus_checks_writer(self):
+    def test_strict_gate_is_isolated_read_plus_status_writer(self):
         strict_block = self.publisher[
             self.publisher.index("  strict_gate:\n"):self.publisher.index("  cleanup:\n")
         ]
         self.assertIn("    needs: [preflight, publish]\n", strict_block)
         self.assertIn("      actions: read\n", strict_block)
-        self.assertIn("      checks: write\n", strict_block)
         self.assertIn("      contents: read\n", strict_block)
         self.assertIn("      issues: read\n", strict_block)
         self.assertIn("      pull-requests: read\n", strict_block)
+        self.assertIn("      statuses: write\n", strict_block)
+        self.assertNotIn("checks: write", strict_block)
         self.assertNotIn("contents: write", strict_block)
         self.assertNotIn("pull-requests: write", strict_block)
         self.assertNotIn("issues: write", strict_block)
