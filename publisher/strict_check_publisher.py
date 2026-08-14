@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Publish the strict required check only after trusted generated-PR validation.
+"""Publish the strict required commit status after trusted generated-PR validation.
 
 This runtime executes from protected ``main`` in the user-originated historical
-publisher workflow. Its token has read access plus ``checks: write`` only. It
+publisher workflow. Its token has read access plus ``statuses: write`` only. It
 never checks out or executes candidate content and has no PR mutation or
 contents-write authority.
 """
@@ -30,12 +30,12 @@ from publisher.strict_generated_pr_gate import validate_generated_pr
 
 
 CHECK_NAME = "bootstrap"
-CHECK_EXTERNAL_PREFIX = "hwm-generated-ledger-strict-v1"
+STATUS_DESCRIPTION_PREFIX = "Trusted generated-ledger gate "
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
-        raise Reject("STRICT_CHECK_REJECTED", message)
+        raise Reject("STRICT_STATUS_REJECTED", message)
 
 
 def _request_from_event(event: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -52,7 +52,7 @@ def _request_from_event(event: dict[str, Any]) -> tuple[dict[str, Any], str]:
     try:
         raw = json.loads(comment.get("body", ""))
     except json.JSONDecodeError as exc:
-        raise Reject("STRICT_CHECK_REJECTED", "transport request is not JSON") from exc
+        raise Reject("STRICT_STATUS_REJECTED", "transport request is not JSON") from exc
     request = validate_request(raw)
     _require(request.get("schema") == REQUEST_SCHEMA, "transport request schema mismatch")
     return request, fingerprint(request)
@@ -95,26 +95,26 @@ def _synthetic_pr_event(pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _strict_external_id(request_id: str, fp: str) -> str:
-    return f"{CHECK_EXTERNAL_PREFIX}:{request_id}:{fp}"
+def _status_description(fp: str) -> str:
+    return f"{STATUS_DESCRIPTION_PREFIX}{fp}"
 
 
-def _find_existing_exact_check(api: GitHub, head_sha: str, external_id: str) -> dict[str, Any] | None:
-    response = api.request("GET", f"/commits/{head_sha}/check-runs?check_name={CHECK_NAME}&per_page=100") or {}
+def _find_existing_exact_status(api: GitHub, head_sha: str, description: str) -> dict[str, Any] | None:
+    statuses = api.request("GET", f"/commits/{head_sha}/statuses?per_page=100") or []
     exact = [
-        check
-        for check in response.get("check_runs", [])
-        if isinstance(check, dict)
-        and check.get("name") == CHECK_NAME
-        and check.get("external_id") == external_id
-        and check.get("head_sha") == head_sha
-        and ((check.get("app") or {}).get("id") == 15368)
+        status
+        for status in statuses
+        if isinstance(status, dict)
+        and status.get("context") == CHECK_NAME
+        and status.get("description") == description
+        and ((status.get("creator") or {}).get("login") == RESULT_AUTHOR["login"])
+        and ((status.get("creator") or {}).get("id") == RESULT_AUTHOR["id"])
     ]
-    _require(len(exact) <= 1, "multiple strict required checks share one immutable external identity")
+    _require(len(exact) <= 1, "multiple strict statuses share one immutable validation identity")
     return exact[0] if exact else None
 
 
-def publish_strict_check(event: dict[str, Any], api: GitHub) -> dict[str, Any]:
+def publish_strict_status(event: dict[str, Any], api: GitHub) -> dict[str, Any]:
     request, fp = _request_from_event(event)
     result = _matching_success_result(api, request, fp)
     pr_number = result.get("pr_number")
@@ -140,46 +140,38 @@ def publish_strict_check(event: dict[str, Any], api: GitHub) -> dict[str, Any]:
         "validated candidate bootstrap run differs from publication result",
     )
 
-    external_id = _strict_external_id(request["request_id"], fp)
-    existing = _find_existing_exact_check(api, head_sha, external_id)
+    description = _status_description(fp)
+    existing = _find_existing_exact_status(api, head_sha, description)
     if existing is not None:
-        _require(
-            existing.get("status") == "completed" and existing.get("conclusion") == "success",
-            "existing strict required check is not successful",
-        )
+        _require(existing.get("state") == "success", "existing strict required status is not successful")
         return {
             "idempotent_replay": True,
-            "check_run_id": existing.get("id"),
+            "status_id": existing.get("id"),
             **evidence,
         }
 
-    summary = (
-        "Trusted generated-ledger validation succeeded for exact PR/base/head/current synthetic merge, "
-        "the two canonical paths and requested blob identities, direct parent/tree relationships, "
-        "request provenance, no-drift rereads, and the mandatory exact-candidate bootstrap run."
-    )
-    check = api.request(
+    run_id = dispatch["run_id"]
+    status = api.request(
         "POST",
-        "/check-runs",
+        f"/statuses/{head_sha}",
         {
-            "name": CHECK_NAME,
-            "head_sha": head_sha,
-            "status": "completed",
-            "conclusion": "success",
-            "external_id": external_id,
-            "output": {
-                "title": "Trusted generated-ledger strict merge gate",
-                "summary": summary,
-            },
+            "state": "success",
+            "context": CHECK_NAME,
+            "description": description,
+            "target_url": f"https://github.com/{REPOSITORY}/actions/runs/{run_id}",
         },
     ) or {}
-    _require(check.get("name") == CHECK_NAME, "created strict check name mismatch")
-    _require(check.get("head_sha") == head_sha, "created strict check head mismatch")
-    _require((check.get("app") or {}).get("id") == 15368, "created strict check integration mismatch")
-    _require(check.get("status") == "completed" and check.get("conclusion") == "success", "created strict check is not successful")
+    _require(status.get("context") == CHECK_NAME, "created strict status context mismatch")
+    _require(status.get("state") == "success", "created strict status is not successful")
+    _require(status.get("description") == description, "created strict status validation identity mismatch")
+    creator = status.get("creator") or {}
+    _require(
+        creator.get("login") == RESULT_AUTHOR["login"] and creator.get("id") == RESULT_AUTHOR["id"],
+        "created strict status source is not the repository GitHub Actions installation",
+    )
     return {
         "idempotent_replay": False,
-        "check_run_id": check.get("id"),
+        "status_id": status.get("id"),
         **evidence,
     }
 
@@ -195,9 +187,9 @@ def main(argv: list[str]) -> int:
     with open(argv[1], "r", encoding="utf-8") as handle:
         event = json.load(handle)
     try:
-        evidence = publish_strict_check(event, GitHub(token))
+        evidence = publish_strict_status(event, GitHub(token))
     except Reject as exc:
-        print(f"strict_check={exc.code}: {exc.message}", file=sys.stderr)
+        print(f"strict_status={exc.code}: {exc.message}", file=sys.stderr)
         return 1
     print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
     return 0
