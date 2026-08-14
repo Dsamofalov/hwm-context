@@ -28,8 +28,7 @@ class RepositoryBootstrapAutomationCompatibilityTests(unittest.TestCase):
     def setUpClass(cls):
         cls.bootstrap = BOOTSTRAP_WORKFLOW.read_text(encoding="utf-8")
         cls.publisher = PUBLISHER_WORKFLOW.read_text(encoding="utf-8")
-        cls.pr_block = event_block(cls.bootstrap, "pull_request", "pull_request_target")
-        cls.pr_target_block = event_block(cls.bootstrap, "pull_request_target", "push")
+        cls.pr_block = event_block(cls.bootstrap, "pull_request", "push")
 
     def test_pull_request_trigger_preserved_with_exact_paths_ignore(self):
         self.assertIn("    branches: [main]\n", self.pr_block)
@@ -45,39 +44,13 @@ class RepositoryBootstrapAutomationCompatibilityTests(unittest.TestCase):
         self.assertNotIn("claims/**", self.pr_block)
         self.assertNotIn("claims/*", self.pr_block)
         self.assertTrue(ignored_by_exact_generated_filter(CANONICAL_GENERATED_PATHS))
-        self.assertFalse(
-            ignored_by_exact_generated_filter(
-                ("claims/claims.jsonl", "README.md")
-            )
-        )
-        self.assertFalse(
-            ignored_by_exact_generated_filter(("claims/wrong.json",))
-        )
+        self.assertFalse(ignored_by_exact_generated_filter(("claims/claims.jsonl", "README.md")))
+        self.assertFalse(ignored_by_exact_generated_filter(("claims/wrong.json",)))
 
-    def test_pull_request_target_is_narrow_and_read_only(self):
-        self.assertIn("    types: [opened, reopened, synchronize]\n", self.pr_target_block)
-        self.assertIn("    branches: [main]\n", self.pr_target_block)
-        self.assertIn("    paths:\n", self.pr_target_block)
-        paths = [
-            line.strip()[2:]
-            for line in self.pr_target_block.splitlines()
-            if line.strip().startswith("- ")
-        ]
-        self.assertEqual(paths, list(CANONICAL_GENERATED_PATHS))
-        self.assertNotIn("claims/**", self.pr_target_block)
-        self.assertIn("      actions: read\n", self.bootstrap)
-        self.assertIn("      contents: read\n", self.bootstrap)
-        self.assertIn("      issues: read\n", self.bootstrap)
-        self.assertIn("      pull-requests: read\n", self.bootstrap)
+    def test_no_generated_pr_automatic_target_gate(self):
+        self.assertNotIn("  pull_request_target:\n", self.bootstrap)
         self.assertNotIn("checks: write", self.bootstrap)
-
-    def test_pr_target_required_name_is_only_for_trusted_publisher_identity(self):
-        self.assertIn("github.event.pull_request.user.login != 'github-actions[bot]'", self.bootstrap)
-        self.assertIn("github.event.pull_request.user.id != 41898282", self.bootstrap)
-        self.assertIn("!startsWith(github.event.pull_request.head.ref, 'publisher/historical-ledger/')", self.bootstrap)
-        self.assertIn("'generated-ledger-preflight' || 'bootstrap'", self.bootstrap)
-        self.assertIn("python -m publisher.strict_generated_pr_gate", self.bootstrap)
-        self.assertIn("HWM_CONTEXT_GATE_TOKEN: ${{ github.token }}", self.bootstrap)
+        self.assertNotIn("strict_generated_pr_gate", self.bootstrap)
 
     def test_push_main_and_workflow_dispatch_preserved(self):
         self.assertIn("  push:\n    branches: [main]\n", self.bootstrap)
@@ -86,26 +59,11 @@ class RepositoryBootstrapAutomationCompatibilityTests(unittest.TestCase):
     def test_dispatch_exact_head_verification_preserved(self):
         self.assertIn("description: exact candidate commit SHA to validate", self.bootstrap)
         self.assertIn('test "$GITHUB_SHA" = "$EXPECTED_HEAD"', self.bootstrap)
-        self.assertIn(
-            "github.event_name == 'workflow_dispatch' && inputs.expected_head",
-            self.bootstrap,
-        )
-        self.assertIn(
-            'run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"',
-            self.bootstrap,
-        )
-
-    def test_pr_target_checks_out_only_protected_base(self):
-        self.assertIn(
-            "github.event_name == 'pull_request_target' && github.event.pull_request.base.sha",
-            self.bootstrap,
-        )
-        self.assertIn("Verify protected-base checkout for generated PR gate", self.bootstrap)
-        self.assertIn('run: test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"', self.bootstrap)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.expected_head", self.bootstrap)
+        self.assertIn('run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"', self.bootstrap)
 
     def test_required_bootstrap_name_and_checkout_pin_preserved(self):
-        self.assertIn("jobs:\n  bootstrap:\n", self.bootstrap)
-        self.assertIn("'bootstrap' }}", self.bootstrap)
+        self.assertIn("jobs:\n  bootstrap:\n    name: bootstrap\n", self.bootstrap)
         self.assertIn(CHECKOUT_PIN, self.bootstrap)
         self.assertNotIn("actions/checkout@main", self.bootstrap)
         self.assertNotIn("actions/checkout@master", self.bootstrap)
@@ -115,12 +73,35 @@ class RepositoryBootstrapAutomationCompatibilityTests(unittest.TestCase):
         self.assertIn("ref: main", self.publisher)
         self.assertIn("persist-credentials: false", self.publisher)
         self.assertIn(CHECKOUT_PIN, self.publisher)
-        self.assertIn(
-            "run: python -m publisher.historical_ledger_publisher_v2 publish",
-            self.publisher,
-        )
+        self.assertIn("run: python -m publisher.historical_ledger_publisher_v2 publish", self.publisher)
+        publish_block = self.publisher[
+            self.publisher.index("  publish:\n"):self.publisher.index("  strict_gate:\n")
+        ]
+        self.assertIn("      contents: write\n", publish_block)
+        self.assertIn("      pull-requests: write\n", publish_block)
+        self.assertIn("      issues: write\n", publish_block)
+        self.assertIn("      actions: write\n", publish_block)
+        self.assertNotIn("checks: write", publish_block)
         self.assertNotIn("gh pr merge", self.publisher)
         self.assertNotIn("pull_request_review", self.publisher)
+
+    def test_strict_gate_is_isolated_read_plus_checks_writer(self):
+        strict_block = self.publisher[
+            self.publisher.index("  strict_gate:\n"):self.publisher.index("  cleanup:\n")
+        ]
+        self.assertIn("    needs: [preflight, publish]\n", strict_block)
+        self.assertIn("      actions: read\n", strict_block)
+        self.assertIn("      checks: write\n", strict_block)
+        self.assertIn("      contents: read\n", strict_block)
+        self.assertIn("      issues: read\n", strict_block)
+        self.assertIn("      pull-requests: read\n", strict_block)
+        self.assertNotIn("contents: write", strict_block)
+        self.assertNotIn("pull-requests: write", strict_block)
+        self.assertNotIn("issues: write", strict_block)
+        self.assertIn("HWM_CONTEXT_STRICT_GATE_TOKEN: ${{ github.token }}", strict_block)
+        self.assertIn("python -m publisher.strict_check_publisher", strict_block)
+        self.assertIn("ref: main", strict_block)
+        self.assertIn("persist-credentials: false", strict_block)
 
 
 if __name__ == "__main__":
