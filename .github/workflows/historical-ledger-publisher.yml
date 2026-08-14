@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - id: preflight
         name: Parse trusted transport metadata only
-        run: python publisher/historical_ledger_publisher_v2.py preflight "$GITHUB_EVENT_PATH"
+        run: python -m publisher.historical_ledger_publisher_v2 preflight "$GITHUB_EVENT_PATH"
 
   publish:
     needs: preflight
@@ -48,7 +48,7 @@ jobs:
       - name: Publish inert historical-ledger Git objects through scoped PR
         env:
           HWM_CONTEXT_PUBLISHER_TOKEN: ${{ github.token }}
-        run: python publisher/historical_ledger_publisher_v2.py publish "$GITHUB_EVENT_PATH"
+        run: python -m publisher.historical_ledger_publisher_v2 publish "$GITHUB_EVENT_PATH"
 
   cleanup:
     if: >-
@@ -67,4 +67,4 @@ jobs:
       - name: Delete closed unmerged scoped sandbox branch
         env:
           HWM_CONTEXT_PUBLISHER_TOKEN: ${{ github.token }}
-        run: python publisher/historical_ledger_publisher_v2.py cleanup "$GITHUB_EVENT_PATH"
+        run: python -m publisher.historical_ledger_publisher_v2 cleanup "$GITHUB_EVENT_PATH"
