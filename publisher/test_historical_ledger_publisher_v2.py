@@ -18,7 +18,8 @@ class TransactionalPublisherTests(unittest.TestCase):
             "GitHub API POST /pulls failed with 403: GitHub Actions is not permitted to create or approve pull requests."
         ))
         self.assertEqual(reject.code, "PR_CREATION_FORBIDDEN")
-        self.assertNotIn("token", reject.message.lower())
+        self.assertNotIn("bearer", reject.message.lower())
+        self.assertNotIn("ghp_", reject.message.lower())
 
     def test_other_pr_failure_is_sanitized(self):
         reject = classify_pr_error(RuntimeError("GitHub API POST /pulls failed with 422: details"))
