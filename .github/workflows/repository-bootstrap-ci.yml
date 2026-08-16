@@ -47,6 +47,8 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ inputs.expected_head }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Install pinned staging contract validator
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
       - name: Validate materialized read-model boundary
         shell: bash
         run: |
