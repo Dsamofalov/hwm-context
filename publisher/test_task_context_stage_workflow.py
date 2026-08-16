@@ -30,6 +30,15 @@ class TaskContextStageWorkflowTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, permissions)
 
+    def test_preflight_has_pinned_schema_dependencies_before_importing_stager(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        preflight = text.split("  preflight:\n", 1)[1].split("\n  stage:\n", 1)[0]
+        install = "python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'"
+        parse = "python -m publisher.task_context_stager preflight"
+        self.assertIn(install, preflight)
+        self.assertIn(parse, preflight)
+        self.assertLess(preflight.index(install), preflight.index(parse))
+
     def test_token_is_exposed_only_to_confined_uploader_step(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(text.count("${{ github.token }}"), 1)
