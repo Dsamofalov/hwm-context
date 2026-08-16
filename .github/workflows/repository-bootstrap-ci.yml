@@ -6,12 +6,13 @@ on:
     paths-ignore:
       - claims/claims.jsonl
       - claims/conflicts.json
+      - tasks/I[0-9][0-9]-[0-9][0-9][0-9][0-9]/context.json
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
       request_id:
-        description: historical-ledger publisher request id
+        description: trusted generated-publication request id
         required: true
         type: string
       expected_head:
@@ -54,11 +55,12 @@ jobs:
           test -f .github/CODEOWNERS
           grep -q 'Public derived/materialized read-model repository' README.md
           grep -q 'safe for full public disclosure' README.md
-          for d in bootstrap state tasks wiki graph health; do
+          for d in bootstrap state wiki graph health; do
             test -f "$d/.gitkeep"
             count="$(find "$d" -type f ! -name .gitkeep | wc -l)"
             test "$count" -eq 0
           done
+          test -f tasks/.gitkeep
           test -f claims/.gitkeep
           unexpected="$(find claims -type f ! -name .gitkeep ! -path claims/claims.jsonl ! -path claims/conflicts.json -print)"
           test -z "$unexpected"
@@ -66,5 +68,6 @@ jobs:
             test -f claims/claims.jsonl
             test -f claims/conflicts.json
           fi
+          python -m publisher.task_context_validation .
       - name: Run repository-local publisher security tests
         run: python -m unittest discover -s publisher -p 'test_*.py' -v
