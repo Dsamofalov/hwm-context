@@ -108,32 +108,18 @@ def _as_upload_error(result: dict[str, Any], message: str) -> dict[str, Any]:
     return out
 
 
-def upload_intent(intent_path: Path) -> dict[str, Any]:
-    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+def _validate_intent_shape(intent: Any) -> str:
     if not isinstance(intent, dict) or intent.get("action") not in {"stage", "result_only", "replay"}:
         raise RuntimeError("upload intent action is not allowlisted")
-
-    if intent["action"] == "replay":
+    action = intent["action"]
+    if action == "replay":
         if set(intent) != {"action", "result"} or not isinstance(intent.get("result"), dict):
             raise RuntimeError("replay intent malformed")
-        replay = copy.deepcopy(intent["result"])
-        replay["idempotent_replay"] = True
-        print(canonical_json(replay))
-        return replay
-
-    token = os.environ.get(TOKEN_ENV, "")
-    if not token:
-        raise RuntimeError("job-scoped staging token missing")
-
-    if intent["action"] == "result_only":
+        return action
+    if action == "result_only":
         if set(intent) != {"action", "result"} or not isinstance(intent.get("result"), dict):
             raise RuntimeError("result-only intent malformed")
-        result = intent["result"]
-        _validate_result(result)
-        comment_id = _post_normalized_result(token, result)
-        print(f"result_comment_id={comment_id}")
-        return result
-
+        return action
     expected_keys = {"action", "expected_context_sha256", "expected_git_blob_sha", "expected_byte_length", "result_draft"}
     if set(intent) != expected_keys or not isinstance(intent.get("result_draft"), dict):
         raise RuntimeError("stage intent fields are not closed")
@@ -142,11 +128,38 @@ def upload_intent(intent_path: Path) -> dict[str, Any]:
     expected_length = intent["expected_byte_length"]
     if not isinstance(expected_sha256, str) or len(expected_sha256) != 64 or not isinstance(expected_blob, str) or len(expected_blob) != 40 or not isinstance(expected_length, int) or isinstance(expected_length, bool) or expected_length < 1:
         raise RuntimeError("stage intent identities malformed")
+    return action
 
-    context_path = intent_path.parent / CONTEXT_FILE_NAME
-    data = context_path.read_bytes()
-    if len(data) != expected_length or sha256(data) != expected_sha256 or git_blob_sha(data) != expected_blob:
-        raise RuntimeError("local compiled bytes differ from closed stage intent")
+
+def upload_intent(intent_path: Path) -> dict[str, Any]:
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    action = _validate_intent_shape(intent)
+
+    if action == "replay":
+        replay = copy.deepcopy(intent["result"])
+        replay["idempotent_replay"] = True
+        print(canonical_json(replay))
+        return replay
+
+    if action == "stage":
+        expected_sha256 = intent["expected_context_sha256"]
+        expected_blob = intent["expected_git_blob_sha"]
+        expected_length = intent["expected_byte_length"]
+        context_path = intent_path.parent / CONTEXT_FILE_NAME
+        data = context_path.read_bytes()
+        if len(data) != expected_length or sha256(data) != expected_sha256 or git_blob_sha(data) != expected_blob:
+            raise RuntimeError("local compiled bytes differ from closed stage intent")
+
+    token = os.environ.get(TOKEN_ENV, "")
+    if not token:
+        raise RuntimeError("job-scoped staging token missing")
+
+    if action == "result_only":
+        result = intent["result"]
+        _validate_result(result)
+        comment_id = _post_normalized_result(token, result)
+        print(f"result_comment_id={comment_id}")
+        return result
 
     result = copy.deepcopy(intent["result_draft"])
     try:
