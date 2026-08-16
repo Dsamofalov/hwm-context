@@ -24,6 +24,8 @@ jobs:
         with:
           ref: main
           persist-credentials: false
+      - name: Install pinned preflight contract validator
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
       - id: preflight
         name: Parse trusted stage transport and independently observe protected heads
         run: python -m publisher.task_context_stager preflight "$GITHUB_EVENT_PATH" "$GITHUB_OUTPUT"
