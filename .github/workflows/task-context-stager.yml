@@ -1,0 +1,69 @@
+name: Task Context Stager
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'issue_comment' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      should_run: ${{ steps.preflight.outputs.should_run }}
+      concurrency_key: ${{ steps.preflight.outputs.concurrency_key }}
+      control_sha: ${{ steps.preflight.outputs.control_sha }}
+      context_sha: ${{ steps.preflight.outputs.context_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - id: preflight
+        name: Parse trusted stage transport and independently observe protected heads
+        run: python -m publisher.task_context_stager preflight "$GITHUB_EVENT_PATH" "$GITHUB_OUTPUT"
+
+  stage:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: hwm-task-context-stage-${{ github.repository_id }}-${{ needs.preflight.outputs.concurrency_key }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - name: Checkout exact protected hwm-context stager
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.context_sha }}
+          persist-credentials: false
+      - name: Verify exact protected hwm-context checkout
+        env:
+          EXPECTED_CONTEXT_SHA: ${{ needs.preflight.outputs.context_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_CONTEXT_SHA"
+      - name: Checkout exact protected hwm-control compiler
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Dsamofalov/hwm-control
+          ref: ${{ needs.preflight.outputs.control_sha }}
+          path: trusted-control
+          persist-credentials: false
+      - name: Verify exact protected hwm-control checkout
+        env:
+          EXPECTED_CONTROL_SHA: ${{ needs.preflight.outputs.control_sha }}
+        run: test "$(git -C trusted-control rev-parse HEAD)" = "$EXPECTED_CONTROL_SHA"
+      - name: Install pinned contract validator
+        run: python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+      - name: Compile twice and prepare inert upload intent without token
+        run: python -m publisher.task_context_stager prepare "$GITHUB_EVENT_PATH" "$GITHUB_WORKSPACE/trusted-control" "$GITHUB_WORKSPACE/stage-output" "$GITHUB_RUN_ID"
+      - name: Upload exact blob and normalized result through confined endpoints
+        env:
+          HWM_TASK_CONTEXT_STAGE_TOKEN: ${{ github.token }}
+        run: python -m publisher.task_context_stage_uploader upload "$GITHUB_WORKSPACE/stage-output/intent.json"
