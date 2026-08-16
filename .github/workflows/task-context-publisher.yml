@@ -1,0 +1,90 @@
+name: Task Context Publisher
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: ${{ github.event_name == 'issue_comment' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      should_run: ${{ steps.preflight.outputs.should_run }}
+      concurrency_key: ${{ steps.preflight.outputs.concurrency_key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - id: preflight
+        name: Parse trusted task-context transport metadata only
+        run: python -m publisher.task_context_publisher preflight "$GITHUB_EVENT_PATH"
+
+  publish:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: hwm-task-context-${{ github.repository_id }}-${{ needs.preflight.outputs.concurrency_key }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Publish inert canonical task-context blob through scoped PR
+        env:
+          HWM_TASK_CONTEXT_PUBLISHER_TOKEN: ${{ github.token }}
+        run: python -m publisher.task_context_publisher publish "$GITHUB_EVENT_PATH"
+
+  strict_gate:
+    needs: [preflight, publish]
+    if: ${{ needs.preflight.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Publish required bootstrap status only after exact task-context validation
+        env:
+          HWM_TASK_CONTEXT_STRICT_GATE_TOKEN: ${{ github.token }}
+        run: python -m publisher.task_context_strict_gate "$GITHUB_EVENT_PATH"
+
+  cleanup:
+    if: >-
+      ${{ github.event_name == 'pull_request_target' && github.event.action == 'closed' &&
+          github.event.pull_request.merged == false && github.event.pull_request.base.ref == 'main' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          startsWith(github.event.pull_request.head.ref, 'publisher/task-context/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Delete closed unmerged scoped task-context branch
+        env:
+          HWM_TASK_CONTEXT_PUBLISHER_TOKEN: ${{ github.token }}
+        run: python -m publisher.task_context_publisher cleanup "$GITHUB_EVENT_PATH"
